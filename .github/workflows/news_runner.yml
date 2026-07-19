@@ -2,31 +2,30 @@ name: Run News Bot
 
 on:
   schedule:
-    # Shifted to off-peak minutes (12, 27, 42, 57) to avoid congested queues
-    - cron: '12,27,42,57 * * * *'
-  
-  # Temporarily add "push" to force-register the schedule with GitHub's backend
-  push:
-    branches:
-      - main
+    - cron: "12,27,42,57 * * * *"
 
   workflow_dispatch:
 
+concurrency:
+  group: news-bot
+  cancel-in-progress: false
+
 jobs:
   run-bot:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: true
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12' # Upgraded to 3.12 to address the EOL warning
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -40,15 +39,16 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python news_bot.py
 
-      - name: Commit and Push Cache Changes
+      - name: Commit cache
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git add processed_urls.json || true
-          
-          if git diff --staged --quiet; then
-            echo "No new changes to commit."
+
+          if git diff --cached --quiet; then
+            echo "No changes."
           else
             git commit -m "chore: update processed articles cache"
-            git push origin main
+            git push
           fi
