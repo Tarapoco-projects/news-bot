@@ -2,14 +2,21 @@ name: Run News Bot
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Runs every 15 minutes
-  workflow_dispatch:        # Allows manually triggering from the GitHub Actions tab
+    # Shifted to off-peak minutes (12, 27, 42, 57) to avoid congested queues
+    - cron: '12,27,42,57 * * * *'
+  
+  # Temporarily add "push" to force-register the schedule with GitHub's backend
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # Essential for allowing the Action to push cache commits
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,7 +26,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12' # Upgraded to 3.12 to address the EOL warning
 
       - name: Install dependencies
         run: |
@@ -39,9 +46,8 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add processed_urls.json || true
           
-          # Check if there are changes before committing
           if git diff --staged --quiet; then
-            echo "No new articles found. Cache is already up to date."
+            echo "No new changes to commit."
           else
             git commit -m "chore: update processed articles cache [skip ci]"
             git push origin main
