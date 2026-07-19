@@ -51,7 +51,6 @@ async def process_feed(feed_url, cache, bot, model):
         return []
 
     new_articles = []
-    # Inspect the top 3 most recent articles from this feed to check for new content
     for entry in feed.entries[:3]:
         link = entry.get('link')
         if not link:
@@ -68,32 +67,46 @@ async def process_feed(feed_url, cache, bot, model):
 
         print(f"New article found: '{title}'")
 
-        # Create a prompt for Gemini
+        # Create the prompt
         prompt = f"Summarize this news in 2 bullet points: {title}. {summary_text}"
         
         try:
-            summary_response = await model.generate_content_async(prompt)
-            summary = summary_response.text
+            # 1. Switch to sync generation to prevent asyncio event-loop conflicts.
+            # 2. Relax safety filters so real-world news is not blocked.
+            summary_response = model.generate_content(
+                prompt,
+                safety_settings={
+                    "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+                    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+                }
+            )
+            
+            # Check if the response contains text before accessing it
+            if summary_response.text:
+                summary = summary_response.text
+            else:
+                summary = "Could not generate summary (empty response)."
+                
         except Exception as e:
-            print(f"Gemini API generation error: {e}")
-            summary = "Summary generation failed."
+            # This will print the precise error details to your GitHub Action/Local console
+            print(f"Gemini API error for '{title}': {e}")
+            summary = "Summary generation failed due to an API error."
 
         message = f"📰 *{title}*\n\n📝 *Summary:*\n{summary}\n\n🔗 [Read Full]({link})"
         
         try:
-            # Attempt to send with markdown styling
             await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
             sent_links.append(link)
         except Exception as e:
             print(f"Markdown send failed ({e}), attempting fallback plain text delivery.")
             try:
-                # Fallback to plain text if the AI summary included problematic Markdown characters
                 await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
                 sent_links.append(link)
             except Exception as e_inner:
                 print(f"Failed to send message entirely: {e_inner}")
 
-        # Minor cooldown to avoid Telegram bot API rate limits
         await asyncio.sleep(1.5)
 
     return sent_links
