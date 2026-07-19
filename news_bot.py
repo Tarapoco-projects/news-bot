@@ -118,7 +118,7 @@ async def main():
 
     bot = Bot(token=TELEGRAM_TOKEN)
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite')
 
     cache = load_cache()
     new_cache_entries = []
