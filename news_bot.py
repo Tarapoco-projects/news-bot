@@ -1,27 +1,25 @@
 import os
-import asyncio
 import httpx
 import google.generativeai as genai
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Bot
+import asyncio
+from datetime import datetime, timezone, timedelta
 
-# Securely load API keys from environment variables
+# Securely load API keys
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-if not all([TELEGRAM_TOKEN, NEWS_API_KEY, GEMINI_API_KEY]):
-    raise ValueError("Missing one or more API keys in environment variables!")
+async def main():
+    bot = Bot(token=TELEGRAM_TOKEN)
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+    # Calculate the time 15 minutes ago
+    fifteen_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=15)
 
-seen_articles = set()
-
-async def fetch_and_summarize(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
     url = f"https://newsapi.org/v2/top-headlines?country=us&apiKey={NEWS_API_KEY}"
-    
     async with httpx.AsyncClient() as client:
         response = await client.get(url)
         data = response.json()
@@ -29,45 +27,39 @@ async def fetch_and_summarize(context: ContextTypes.DEFAULT_TYPE):
     if data.get("status") != "ok" or not data.get("articles"):
         return
 
+    # Find articles published strictly in the last 15 minutes
+    new_articles = []
     for article in data["articles"]:
-        article_url = article.get("url")
-        if article_url in seen_articles:
-            continue
-
-        seen_articles.add(article_url)
-        title = article.get("title", "No Title")
-        date_published = article.get("publishedAt", "Unknown Date")[:10]
+        pub_str = article.get("publishedAt")
+        if not pub_str: continue
         
-        raw_text = f"Description: {article.get('description', '')}\nContent: {article.get('content', '')}"
-        prompt = f"You are a concise news editor. Summarize the following news article in 2 to 3 bullet points. Keep it factual and brief.\n\nTitle: {title}\nText: {raw_text}"
-        
-        try:
-            summary_response = await model.generate_content_async(prompt)
-            summary = summary_response.text
-        except Exception:
-            summary = "Summary generation failed."
+        # Convert NewsAPI time format to Python format
+        pub_time = datetime.strptime(pub_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        if pub_time >= fifteen_mins_ago:
+            new_articles.append(article)
 
-        message = f"📰 *{title}*\n📅 {date_published}\n\n📝 *Summary:*\n{summary}\n\n🔗 [Read Full Article]({article_url})"
-        
-        await context.bot.send_message(
-            chat_id=chat_id, text=message, parse_mode="Markdown", disable_web_page_preview=True
-        )
-        break 
+    if not new_articles:
+        print("No new articles published in the last 15 minutes.")
+        return
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    await update.message.reply_text("News Summary Bot is now active! 🗞️\nI will check for breaking news every 15 minutes.")
+    # Grab the most recent new article to summarize
+    article = new_articles[0]
+    title = article.get("title", "No Title")
+    article_url = article.get("url")
+    raw_text = f"Description: {article.get('description', '')}\nContent: {article.get('content', '')}"
     
-    current_jobs = context.job_queue.get_jobs_by_name(str(chat_id))
-    for job in current_jobs:
-        job.schedule_removal()
+    prompt = f"You are a concise news editor. Summarize the following news article in 2 to 3 bullet points. Keep it factual and brief.\n\nTitle: {title}\nText: {raw_text}"
+    
+    try:
+        summary_response = await model.generate_content_async(prompt)
+        summary = summary_response.text
+    except Exception:
+        summary = "Summary generation failed."
 
-    context.job_queue.run_repeating(
-        fetch_and_summarize, interval=900, first=5, chat_id=chat_id, name=str(chat_id)
-    )
+    message = f"📰 *{title}*\n\n📝 *Summary:*\n{summary}\n\n🔗 [Read Full Article]({article_url})"
+    
+    # Send directly to your Chat ID
+    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown", disable_web_page_preview=True)
 
-if __name__ == '__main__':
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    print("Bot is starting in the cloud...")
-    app.run_polling(allowed_updates=Update.ALL)
+if __name__ == "__main__":
+    asyncio.run(main())
