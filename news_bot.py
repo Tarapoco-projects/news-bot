@@ -145,9 +145,9 @@ async def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # Initialize the model with a strict persona to avoid conversational fluff
+    # Initialize the Gemini 3.1 Flash-Lite model with direct system instruction
     model = genai.GenerativeModel(
-        'gemini-2.5-flash',
+        'gemini-3.1-flash-lite',
         system_instruction=(
             "You are a precise news summarizer. Output ONLY the requested bullet points. "
             "Never include introductory text, conversational filler (such as 'Here is a summary:'), "
