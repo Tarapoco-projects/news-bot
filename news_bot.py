@@ -21,6 +21,7 @@ RSS_FEEDS = [
     "https://www.theverge.com/rss/index.xml"    # The Verge
 ]
 
+
 def load_cache():
     if os.path.exists(CACHE_FILE):
         try:
@@ -31,6 +32,7 @@ def load_cache():
             return []
     return []
 
+
 def save_cache(cache):
     try:
         # Keep only the last N items to keep the repository commit footprint small
@@ -39,7 +41,11 @@ def save_cache(cache):
     except Exception as e:
         print(f"Error saving cache file: {e}")
 
+
 async def process_feed(feed_url, cache, bot, model):
+    """
+    Fetches, parses, summarizes, and sends updates for a single RSS feed.
+    """
     print(f"Parsing feed: {feed_url}")
     try:
         feed = feedparser.parse(feed_url)
@@ -51,6 +57,7 @@ async def process_feed(feed_url, cache, bot, model):
         return []
 
     new_articles = []
+    # Inspect the top 3 most recent articles from this feed to check for new content
     for entry in feed.entries[:3]:
         link = entry.get('link')
         if not link:
@@ -67,12 +74,11 @@ async def process_feed(feed_url, cache, bot, model):
 
         print(f"New article found: '{title}'")
 
-        # Create the prompt
-        prompt = f"Summarize this news in 2 bullet points: {title}. {summary_text}"
+        # Create a clean, direct prompt for the model
+        prompt = f"Summarize this news article in exactly 2 bullet points:\n\nTitle: {title}\nContent: {summary_text}"
         
         try:
-            # 1. Switch to sync generation to prevent asyncio event-loop conflicts.
-            # 2. Relax safety filters so real-world news is not blocked.
+            # Generate summary synchronously to prevent asyncio event-loop conflicts
             summary_response = model.generate_content(
                 prompt,
                 safety_settings={
@@ -83,42 +89,72 @@ async def process_feed(feed_url, cache, bot, model):
                 }
             )
             
-            # Check if the response contains text before accessing it
             if summary_response.text:
-                summary = summary_response.text
+                raw_summary = summary_response.text
+                
+                # --- Post-Processing / Output Cleanup ---
+                # 1. Split into lines and strip all leading/trailing whitespaces from each line
+                lines = [line.strip() for line in raw_summary.split("\n") if line.strip()]
+                
+                cleaned_lines = []
+                for line in lines:
+                    lower_line = line.lower()
+                    # 2. Skip any common introductory phrases if they slip past the model
+                    if lower_line.startswith(("here is", "here are", "summary of", "this is a", "the following is")) and line.endswith(":"):
+                        continue
+                    cleaned_lines.append(line)
+                
+                # Reconstruct summary with single newline separations and no leading indents
+                summary = "\n".join(cleaned_lines)
             else:
                 summary = "Could not generate summary (empty response)."
                 
         except Exception as e:
-            # This will print the precise error details to your GitHub Action/Local console
             print(f"Gemini API error for '{title}': {e}")
             summary = "Summary generation failed due to an API error."
 
         message = f"📰 *{title}*\n\n📝 *Summary:*\n{summary}\n\n🔗 [Read Full]({link})"
         
         try:
+            # Attempt to send with markdown styling
             await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
             sent_links.append(link)
         except Exception as e:
             print(f"Markdown send failed ({e}), attempting fallback plain text delivery.")
             try:
+                # Fallback to plain text if the AI summary included unescaped Markdown syntax
                 await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
                 sent_links.append(link)
             except Exception as e_inner:
                 print(f"Failed to send message entirely: {e_inner}")
 
+        # Minor cooldown to avoid Telegram bot API rate limits
         await asyncio.sleep(1.5)
 
     return sent_links
 
+
 async def main():
+    """
+    Main orchestrator of the bot execution.
+    """
     if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY]):
         print("Required environment keys are missing. Exiting run.")
         return
 
     bot = Bot(token=TELEGRAM_TOKEN)
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-3.1-flash-lite')
+    
+    # Initialize the model with a strict persona to avoid conversational fluff
+    model = genai.GenerativeModel(
+        'gemini-2.5-flash',
+        system_instruction=(
+            "You are a precise news summarizer. Output ONLY the requested bullet points. "
+            "Never include introductory text, conversational filler (such as 'Here is a summary:'), "
+            "or wrap-up sentences. Start immediately with the first bullet point. "
+            "Use a standard hyphen (-) or bullet (•) with no leading spaces or indentation."
+        )
+    )
 
     cache = load_cache()
     new_cache_entries = []
@@ -134,6 +170,7 @@ async def main():
         print(f"Run completed. Cached {len(new_cache_entries)} new articles.")
     else:
         print("Run completed. No new articles found.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
