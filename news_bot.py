@@ -1,5 +1,6 @@
 import os
 import json
+import html  # Add this import
 import feedparser
 import google.generativeai as genai
 from telegram import Bot
@@ -68,9 +69,10 @@ async def process_feed(feed_url, cache, bot, model):
 
     sent_links = []
     for article in new_articles:
-        title = article.get('title', 'No Title Specified')
+        # Wrap title and summary in html.unescape to convert entities like &#8217; to normal apostrophes
+        title = html.unescape(article.get('title', 'No Title Specified'))
         link = article.get('link')
-        summary_text = article.get('summary', '')
+        summary_text = html.unescape(article.get('summary', ''))
 
         print(f"New article found: '{title}'")
 
